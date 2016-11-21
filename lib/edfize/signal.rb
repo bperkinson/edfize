@@ -15,8 +15,8 @@ module Edfize
       digital_minimum:         { size:  8, after_read: :to_i,  name: 'Digital Minimum' },
       digital_maximum:         { size:  8, after_read: :to_i,  name: 'Digital Maximum' },
       prefiltering:            { size: 80, after_read: :strip, name: 'Prefiltering' },
-      samples_per_data_record: { size:  8, after_read: :to_i,  name: 'Samples Per Data Record' },
-      reserved_area:           { size: 32,                     name: 'Reserved Area' }
+      samples_per_data_record: { size:  8, after_read: :to_i,  name: 'Samples Per Data Record' }
+      #reserved_area:           { size: 32,                     name: 'Reserved Area' }
     }
 
     def initialize
