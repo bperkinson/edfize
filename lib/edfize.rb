@@ -1,4 +1,5 @@
 require 'edfize/edf'
+require 'edfize/ydf'
 require 'edfize/tests'
 require 'edfize/version'
 

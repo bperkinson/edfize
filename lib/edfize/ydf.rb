@@ -1,5 +1,5 @@
-require 'edfize/signal'
-require 'edfize/events'
+require 'edfize/ydf_signal'
+require 'edfize/event'
 
 module Edfize
   class Ydf
@@ -26,26 +26,29 @@ module Edfize
     attr_accessor :events
 
     HEADER_CONFIG = {
-      version:                        { size:  8, after_read: :to_i,  name: 'Version' },
+      version:                        { size:  8, after_read: :strip,  name: 'Version' },
       local_patient_identification:   { size: 16, after_read: :strip, name: 'Local Patient Identification' },
       start_date_of_recording:        { size:  8,                     name: 'Start Date of Recording', description: '(dd.mm.yy)' },
       start_time_of_recording:        { size:  8,                     name: 'Start Time of Recording', description: '(hh.mm.ss)'},
       reserved:                       { size: 16,                     name: 'Reserved' },
       number_of_bytes_in_header:      { size:  8, after_read: :to_i,  name: 'Number of Bytes in Header' },
       study_duration:                 { size:  8, after_read: :to_i,  name: 'Study Duration'},
-      number_of_signals:              { size:  4, after_read: :to_i,  name: 'Number of Signals' },
-      eeg_channel_config:             { size:  4, after_read: :string, name: 'EEG Channel Configuration'}, 
+      number_of_signals:              { size:  4, after_read: :to_i,  name: 'Number of YdfSignals' },
+      eeg_channel_config:             { size:  4, after_read: :strip, name: 'EEG Channel Configuration'}, 
       number_of_event_lists:          { size:  4, after_read: :to_i,  name: 'Number of Event Lists'},
-      error_code:                     { size:  4, after_read: :to_i,  name: 'Error Code'},
-      reserved_space:                 { size: 40,                     name: 'Reserved Space'},
-      signal_header:                  { size: 224, after_read: :strip, name: 'Signal for each header'},
-      event_header:                   { size: 65, after_read:  :strip, name: 'Event Header'}
+      error_code:                     { size:  4, after_read: :strip,  name: 'Error Code'},
+      reserved_space:                 { size: 40,                     name: 'Reserved Space'}
+      #total size 128
+      #signal_header:                  { size: 224, after_read: :strip, name: 'YdfSignal for each header'},
+      #event_header:                   { size:  4, after_read:  :strip, name: 'Event Header'}
       
     }
 
     HEADER_OFFSET = HEADER_CONFIG.collect{|k,h| h[:size]}.inject(:+)
 
+
     SIZE_OF_SAMPLE_IN_BYTES = 2
+    SIZE_OF_EVENTS_IN_BYTES = 65
 
     # Used by tests
     RESERVED_SIZE = HEADER_CONFIG[:reserved][:size]
@@ -71,8 +74,8 @@ module Edfize
       get_data_records
     end
 
-    def load_events
-      get_event_records
+    def load_ydf_events
+      get_event_data_records
     end
 
     # Epoch Number is Zero Indexed, and Epoch Size is in Seconds (Not Data Records)
@@ -83,7 +86,7 @@ module Edfize
     end
 
     def size_of_header
-      HEADER_OFFSET + ns * Signal::SIGNAL_CONFIG.collect{|k,h| h[:size]}.inject(:+) + ne * Event::SIGNAL_CONFIG.collect{|k,h| h[:size]}.inject(:+)
+      HEADER_OFFSET + ns * YdfSignal::SIGNAL_CONFIG.collect{|k,h| h[:size]}.inject(:+) + ne * Event::EVENT_CONFIG.collect{|k,h| h[:size]}.inject(:+)
     end
 
     def expected_size_of_header
@@ -97,7 +100,15 @@ module Edfize
 
     # Data Section Size In Bytes
     def expected_data_size
-      @signals.collect(&:samples_per_data_record).inject(:+).to_i * @number_of_data_records * SIZE_OF_SAMPLE_IN_BYTES
+      (@signals.collect(&:samples_per_data_record).inject(:+).to_i * @number_of_signals * SIZE_OF_SAMPLE_IN_BYTES) + (@events.collect(&:file_length).inject(:+).to_i * @number_of_event_lists * SIZE_OF_SAMPLE_IN_BYTES)
+    end
+
+    def expected_signal_data_size
+      (@signals.collect(&:samples_per_data_record).inject(:+).to_i * @number_of_signals * SIZE_OF_SAMPLE_IN_BYTES)
+    end
+
+    def expected_event_data_size
+      (@events.collect(&:file_length).inject(:+).to_i * @number_of_event_lists * SIZE_OF_EVENTS_IN_BYTES)
     end
 
     def expected_edf_size
@@ -135,10 +146,15 @@ module Edfize
       HEADER_CONFIG.each do |section, hash|
         puts "#{hash[:name]}#{' '*(31 - hash[:name].size)}: " + section_value_to_string(section) + section_units(section) + section_description(section)
       end
-      puts "\nSignal Information"
+      puts "\nYdfSignal Information"
       signals.each_with_index do |signal, index|
         puts "\n  Position                     : #{index + 1}"
         signal.print_header
+      end
+      puts "\nEvent Information"
+      events.each_with_index do |event, index|
+        puts "\n  Position                     : #{index + 1}"
+        event.print_header
       end
       puts "\nGeneral Information"
       puts "Size of Header (bytes)         : #{size_of_header}"
@@ -146,8 +162,8 @@ module Edfize
       puts "Total Size     (bytes)         : #{edf_size}"
 
       puts "Expected Size of Header (bytes): #{expected_size_of_header}"
-      puts "Expected Size of Data   (bytes): #{expected_data_size}"
-      puts "Expected Total Size     (bytes): #{expected_edf_size}"
+      #puts "Expected Size of Data   (bytes): #{expected_data_size}"
+      #puts "Expected Total Size     (bytes): #{expected_edf_size}"
     end
 
     protected
@@ -188,7 +204,7 @@ module Edfize
 
     def create_signals
       (0..ns-1).to_a.each do |signal_number|
-        @signals[signal_number] ||= Signal.new()
+        @signals[signal_number] ||= YdfSignal.new()
       end
     end
 
@@ -200,7 +216,7 @@ module Edfize
     
     def read_signal_header
       create_signals
-      Signal::SIGNAL_CONFIG.keys.each do |section|
+      YdfSignal::SIGNAL_CONFIG.keys.each do |section|
         read_signal_header_section(section)
       end
     end
@@ -214,10 +230,12 @@ module Edfize
 
     def compute_signal_offset(section)
       offset = 0
-      Signal::SIGNAL_CONFIG.each do |key, hash|
+      YdfSignal::SIGNAL_CONFIG.each do |key, hash|
+        #puts "KEY:SECTION #{key} - #{key.class} : #{section} - #{section.class} : #{hash} - #{hash[:size]}"
         break if key == section
         offset += hash[:size]
       end
+      #puts "offset: #{offset}"
       offset
     end
 
@@ -231,29 +249,50 @@ module Edfize
     end
 
     def read_signal_header_section(section)
-      offset = HEADER_OFFSET + ns * compute_signal_offset(section)
+      offset = HEADER_OFFSET 
+      signal_offset = compute_signal_offset(section)
       (0..ns-1).to_a.each do |signal_number|
-        section_size = Signal::SIGNAL_CONFIG[section][:size]
-        result = IO.binread(@filename, section_size, offset+(signal_number*section_size))
-        result = result.to_s.send(Signal::SIGNAL_CONFIG[section][:after_read]) unless Signal::SIGNAL_CONFIG[section][:after_read].to_s == ''
+        section_size = YdfSignal::SIGNAL_CONFIG[section][:size]
+        signal_header_size = YdfSignal::SIGNAL_CONFIG.collect{|k,h| h[:size]}.inject(:+)
+        #puts "section: #{section} : #{section_size} : #{offset} +: #{signal_number} *: #{signal_header_size} +: #{signal_offset}"
+        #
+        result = IO.binread(@filename, section_size, offset+(signal_number*signal_header_size)+signal_offset)
+        result = result.to_s.send(YdfSignal::SIGNAL_CONFIG[section][:after_read]) unless YdfSignal::SIGNAL_CONFIG[section][:after_read].to_s == ''
         @signals[signal_number].send("#{section}=", result)
       end
     end
 
     def read_event_header_section(section)
-      ### add offset for event section BROKEN
-      offset = HEADER_OFFSET + ne * compute_event_offset(section)
-      (0..ne-1).to_a.each do |signal_number|
+      offset = HEADER_OFFSET + YdfSignal::SIGNAL_CONFIG.collect{|k,h| h[:size]}.inject(:+) * ns
+      event_offset = compute_event_offset(section)
+      (0..ne-1).to_a.each do |event_number|
         section_size = Event::EVENT_CONFIG[section][:size]
-        result = IO.binread(@filename, section_size, offset+(event_number*section_size))
+        event_header_size = Event::EVENT_CONFIG.collect{|k,h| h[:size]}.inject(:+)
+        #puts "section: #{section} : #{section_size} : #{offset} +: #{event_number} *: #{event_header_size} +: #{event_offset}"
+        #
+        result = IO.binread(@filename, section_size, offset+(event_number*event_header_size)+event_offset)
         result = result.to_s.send(Event::EVENT_CONFIG[section][:after_read]) unless Event::EVENT_CONFIG[section][:after_read].to_s == ''
         @events[event_number].send("#{section}=", result)
       end
     end
 
+    # def read_event_header_section(section)
+    #   ### add offset for event section BROKEN
+    #   offset = HEADER_OFFSET + ne * compute_event_offset(section)
+    #   (0..ne-1).to_a.each do |event_number|
+    #     section_size = Event::EVENT_CONFIG[section][:size]
+    #     result = IO.binread(@filename, section_size, offset+(event_number*section_size))
+    #     result = result.to_s.send(Event::EVENT_CONFIG[section][:after_read]) unless Event::EVENT_CONFIG[section][:after_read].to_s == ''
+    #     @events[event_number].send("#{section}=", result)
+    #   end
+    # end
+
     def get_data_records
       load_digital_signals()
       calculate_physical_values!()
+    end
+
+    def get_event_data_records
       load_events()
     end
 
@@ -270,14 +309,23 @@ module Edfize
     # 16-bit signed integer size = 2 Bytes = 2 ASCII characters
     # 16-bit signed integer in "Little Endian" format (least significant byte first)
     # unpack:  s<         16-bit signed, (little-endian) byte order
+    # limit to the signal data
     def load_digital_signals
-      all_signal_data = IO.binread(@filename, nil, size_of_header).unpack('s<*')
-      load_signal_data(all_signal_data, @number_of_data_records)
+      all_signal_data = IO.binread(@filename, expected_signal_data_size, size_of_header).unpack('s<*')
+      load_signal_data(all_signal_data, @number_of_signals)
     end
 
     def load_events
-      all_event_data = IO.binread(@filename, nil, size_of_header).unpack('s<*')
-      load_event_data(all_event_data, @number_of_data_records)
+      #find the end of signal data and offset to there
+      #first file data : size -> 1643911 offset -> 37888084
+      #find the full size of the file
+      total_file_length = IO.binread(@filename).length
+      #find the start of all the events
+      all_samples_per_data_record = @events.collect{|s| s.file_length}
+      total_samples_per_data_record = all_samples_per_data_record.inject(:+).to_i
+
+      all_event_data = IO.binread(@filename, total_samples_per_data_record, total_file_length - total_samples_per_data_record)
+      load_event_data(all_event_data, @number_of_event_lists)
     end
 
     def load_signal_data(all_signal_data, data_records_retrieved)
@@ -302,7 +350,7 @@ module Edfize
     end
 
     def load_event_data(all_event_data, data_records_retrieved)
-      all_samples_per_data_record = @events.collect{|s| s.samples_per_data_record}
+      all_samples_per_data_record = @events.collect{|s| s.file_length}
       total_samples_per_data_record = all_samples_per_data_record.inject(:+).to_i
 
       offset = 0
@@ -311,15 +359,23 @@ module Edfize
         offsets << offset
         offset += samples_per_data_record
       end
-
-      (0..data_records_retrieved-1).to_a.each do |data_record_index|
-        @events.each_with_index do |event, event_index|
-          read_start = data_record_index * total_samples_per_data_record + offsets[event_index]
-          (0..event.samples_per_data_record - 1).to_a.each do |value_index|
-            event.event_values << all_event_data[read_start+value_index]
-          end
-        end
+      @events.each do |event|
+        #puts "event this : #{event.start_offset} : #{event.file_length} : #{event.start_offset + event.file_length}"
+        #parse the json values out of the file instead of capturing the entire file.
+        #event.event_values << JSON.parse(all_event_data[event.start_offset..(event.start_offset + event.file_length - 1)], allow_nan: true)
+        event.event_json = JSON.parse(all_event_data[event.start_offset..(event.start_offset + event.file_length - 1)], allow_nan: true)
       end
+      # (0..data_records_retrieved-1).to_a.each do |data_record_index|
+      #   @events.each_with_index do |event, event_index|
+      #     #read_start = data_record_index * total_samples_per_data_record + offsets[event_index]
+      #     puts "events: #{event.start_offset} : #{event.file_length}"
+      #     event.event_values << all_event_data[event.start_offset..event.file_length]
+      #     # (0..event.file_length - 1).to_a.each do |value_index|
+      #     #   puts "read st: #{read_start} : #{value_index} : #{all_event_data.length}"
+      #     #   event.event_values << all_event_data[read_start+value_index]
+      #     # end
+      #   end
+      # end
     end
 
     def calculate_physical_values!
