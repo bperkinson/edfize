@@ -100,7 +100,7 @@ module Edfize
 
     # Data Section Size In Bytes
     def expected_data_size
-      (@signals.collect(&:samples_per_data_record).inject(:+).to_i * @number_of_signals * SIZE_OF_SAMPLE_IN_BYTES) + (@events.collect(&:file_length).inject(:+).to_i * @number_of_event_lists * SIZE_OF_SAMPLE_IN_BYTES)
+      (@signals.collect(&:samples_per_data_record).inject(:+).to_i * @study_duration * SIZE_OF_SAMPLE_IN_BYTES) + (@events.collect(&:file_length).inject(:+).to_i * @number_of_event_lists * SIZE_OF_SAMPLE_IN_BYTES)
     end
 
     def expected_signal_data_size
@@ -312,7 +312,7 @@ module Edfize
     # limit to the signal data
     def load_digital_signals
       all_signal_data = IO.binread(@filename, expected_signal_data_size, size_of_header).unpack('s<*')
-      load_signal_data(all_signal_data, @number_of_signals)
+      load_signal_data(all_signal_data, @study_duration)
     end
 
     def load_events
