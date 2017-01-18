@@ -74,6 +74,11 @@ module Edfize
       get_data_records
     end
 
+    #faster processing with digital only
+    def load_only_digital_signals
+      get_digital_data_records
+    end
+
     def load_ydf_events
       get_event_data_records
     end
@@ -100,15 +105,15 @@ module Edfize
 
     # Data Section Size In Bytes
     def expected_data_size
-      (@signals.collect(&:samples_per_data_record).inject(:+).to_i * @study_duration * SIZE_OF_SAMPLE_IN_BYTES) + (@events.collect(&:file_length).inject(:+).to_i * @number_of_event_lists * SIZE_OF_SAMPLE_IN_BYTES)
+      (@signals.collect(&:samples_per_data_record).inject(:+).to_i * @study_duration * SIZE_OF_SAMPLE_IN_BYTES) + (@events.collect(&:file_length).inject(:+).to_i * @number_of_event_lists * SIZE_OF_EVENTS_IN_BYTES)
     end
 
     def expected_signal_data_size
-      (@signals.collect(&:samples_per_data_record).inject(:+).to_i * @number_of_signals * SIZE_OF_SAMPLE_IN_BYTES)
+      (@signals.collect(&:samples_per_data_record).inject(:+).to_i * @study_duration * SIZE_OF_SAMPLE_IN_BYTES)
     end
 
     def expected_event_data_size
-      (@events.collect(&:file_length).inject(:+).to_i * @number_of_event_lists * SIZE_OF_EVENTS_IN_BYTES)
+      (@events.collect(&:file_length).inject(:+).to_i) # * @number_of_event_lists * SIZE_OF_EVENTS_IN_BYTES)
     end
 
     def expected_edf_size
@@ -166,7 +171,7 @@ module Edfize
       #puts "Expected Total Size     (bytes): #{expected_edf_size}"
     end
 
-    protected
+    #protected
 
     def read_header
       HEADER_CONFIG.keys.each do |section|
@@ -262,6 +267,16 @@ module Edfize
       end
     end
 
+    # def read_signal_header_section(section)
+    #   offset = HEADER_OFFSET + ns * compute_signal_offset(offset)
+    #   (0..ns-1).to_a.each do |signal_number|
+    #     section_size = YdfSignal::SIGNAL_CONFIG[section][:size]
+    #     result = IO.binread(@filename, section_size, offset+(signal_number*section_size))
+    #     result = result.to_s.send(YdfSignal::SIGNAL_CONFIG[section][:after_read]) unless YdfSignal::SIGNAL_CONFIG[section][:after_read].to_s == ''
+    #     @signals[signal_number].send("#{section}=", result)
+    #   end
+    # end
+
     def read_event_header_section(section)
       offset = HEADER_OFFSET + YdfSignal::SIGNAL_CONFIG.collect{|k,h| h[:size]}.inject(:+) * ns
       event_offset = compute_event_offset(section)
@@ -292,6 +307,10 @@ module Edfize
       calculate_physical_values!()
     end
 
+    def get_digital_data_records
+      load_digital_signals()
+    end
+
     def get_event_data_records
       load_events()
     end
@@ -311,9 +330,16 @@ module Edfize
     # unpack:  s<         16-bit signed, (little-endian) byte order
     # limit to the signal data
     def load_digital_signals
+      puts "iobinread: #{@filename}, #{expected_signal_data_size}, #{size_of_header}"
+      #io.binread(filename, 114737064,3777)
       all_signal_data = IO.binread(@filename, expected_signal_data_size, size_of_header).unpack('s<*')
       load_signal_data(all_signal_data, @study_duration)
     end
+
+    # def load_digital_signals
+    #   all_signal_data = IO.binread(@filename, expected_signal_data_size, size_of_header).unpack('s<*')
+    #   load_signal_data(all_signal_data, @study_duration)
+    # end
 
     def load_events
       #find the end of signal data and offset to there
@@ -329,9 +355,10 @@ module Edfize
     end
 
     def load_signal_data(all_signal_data, data_records_retrieved)
+
       all_samples_per_data_record = @signals.collect{|s| s.samples_per_data_record}
       total_samples_per_data_record = all_samples_per_data_record.inject(:+).to_i
-
+ 
       offset = 0
       offsets = []
       all_samples_per_data_record.each do |samples_per_data_record|

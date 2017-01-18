@@ -133,7 +133,7 @@ module Edfize
       puts "Expected Total Size     (bytes): #{expected_edf_size}"
     end
 
-    protected
+    #protected
 
     def read_header
       HEADER_CONFIG.keys.each do |section|
